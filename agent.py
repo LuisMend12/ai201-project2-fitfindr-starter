@@ -18,7 +18,48 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
-from tools import search_listings, suggest_outfit, create_fit_card
+import json
+
+from tools import MODEL, _get_groq_client, create_fit_card, search_listings, suggest_outfit
+
+
+# ── query parsing ─────────────────────────────────────────────────────────────
+
+def _parse_query(query: str) -> dict:
+    """
+    Extract {description, size, max_price} from a free-form user query using
+    the LLM (rather than regex), since real queries are multi-sentence and mix
+    in unrelated context (e.g. "I mostly wear baggy jeans and chunky sneakers")
+    that a keyword search should never see as part of the description.
+    """
+    prompt = (
+        "Extract structured search parameters from this clothing search query.\n"
+        "Return ONLY a JSON object with exactly these keys:\n"
+        '"description" (string, the core item being searched for, omit price, '
+        "size, and any unrelated context like what the user already owns or "
+        "how they plan to style it),\n"
+        '"size" (string or null),\n'
+        '"max_price" (number or null).\n\n'
+        f"Query: {query}"
+    )
+    try:
+        client = _get_groq_client()
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        parsed = json.loads(response.choices[0].message.content)
+        return {
+            "description": parsed.get("description") or query,
+            "size": parsed.get("size"),
+            "max_price": parsed.get("max_price"),
+        }
+    except Exception:
+        # If parsing fails for any reason, fall back to treating the whole
+        # query as the description rather than crashing the planning loop.
+        return {"description": query, "size": None, "max_price": None}
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -92,9 +133,37 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    session["parsed"] = _parse_query(query)
+
+    results = search_listings(
+        session["parsed"]["description"],
+        size=session["parsed"]["size"],
+        max_price=session["parsed"]["max_price"],
+    )
+    session["search_results"] = results
+
+    if not results:
+        parsed = session["parsed"]
+        constraints = []
+        if parsed["max_price"] is not None:
+            constraints.append(f"under ${parsed['max_price']:.0f}")
+        if parsed["size"]:
+            constraints.append(f"in size {parsed['size']}")
+        constraint_text = f" {' '.join(constraints)}" if constraints else ""
+        session["error"] = (
+            f"No listings matched \"{parsed['description']}\"{constraint_text}. "
+            "Try raising your budget, dropping the size filter, or using broader keywords."
+        )
+        return session
+
+    session["selected_item"] = results[0]
+
+    session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+
+    session["fit_card"] = create_fit_card(session["outfit_suggestion"], session["selected_item"])
+
     return session
 
 
