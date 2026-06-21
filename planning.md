@@ -135,18 +135,20 @@ For each tool, describe the specific failure mode you're handling and what the a
 
 ## A Complete Interaction (Step by Step)
 
+FitFindr takes a user from a thrifting query to a shareable outfit post in three chained tool calls: it searches the mock listings for an item matching the user's description, size, and budget, then asks an LLM to suggest how to style that item against the user's existing wardrobe (or with general advice if the wardrobe is empty), and finally turns that suggestion into a casual, shareable caption. `search_listings` fires on the user's initial query; `suggest_outfit` fires only once a listing has actually been found; `create_fit_card` fires only once an outfit suggestion exists. If `search_listings` comes back empty, the agent stops immediately, tells the user what to adjust (loosen the size or price filter, try different keywords), and never calls `suggest_outfit` or `create_fit_card` with empty input.
+
 Write out what a full user interaction looks like from start to finish — tool call by tool call. Use a specific example query.
 
 **Example user query:** "I'm looking for a vintage graphic tee under $30. I mostly wear baggy jeans and chunky sneakers. What's out there and how would I style it?"
 
 **Step 1:**
-<!-- What does the agent do first? Which tool is called? With what input? -->
+The agent parses the query into `description="vintage graphic tee"`, `size=None` (no size was mentioned), `max_price=30.0`, then calls `search_listings("vintage graphic tee", size=None, max_price=30.0)`. Against `data/listings.json`, the top match is `lst_006`, "Graphic Tee — 2003 Tour Bootleg Style" — $24, Depop, good condition (its title and tags overlap most heavily with "vintage," "graphic," and "tee"). The agent stores the full result list in `search_results` and selects this top hit as `selected_item`.
 
 **Step 2:**
-<!-- What happens next? What was returned from step 1? What tool is called now? -->
+The agent calls `suggest_outfit(new_item=<lst_006>, wardrobe=<user's wardrobe>)`. The user's wardrobe (the example wardrobe) already contains `w_001` "Baggy straight-leg jeans, dark wash" and `w_007` "Chunky white sneakers" — a direct match for what the user said they wear. The LLM returns a suggestion pairing the bootleg tee with those two pieces, e.g. tucking the tee loosely into the baggy jeans and finishing with the chunky sneakers for a 90s streetwear look. This string is stored in `outfit_suggestion`.
 
 **Step 3:**
-<!-- Continue until the full interaction is complete -->
+The agent calls `create_fit_card(outfit=<suggestion from Step 2>, new_item=<lst_006>)`. The LLM generates a short, casual caption that mentions the item name, the $24 price, and Depop once each, and captures the streetwear vibe of the outfit. This string is stored in `fit_card`.
 
 **Final output to user:**
-<!-- What does the user actually see at the end? -->
+The user sees the outfit suggestion plus the ready-to-post fit card caption, with `session["error"]` left as `None`. Nothing about a failed search or an empty wardrobe surfaces here, since this query succeeds at every step.
